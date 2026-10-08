@@ -250,7 +250,10 @@ button:disabled { opacity: .55; cursor: not-allowed; }
   <section class="view" id="view-team" hidden>
     <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px">
       <h2>All jobs</h2>
-      <button class="btn small" id="export-btn" hidden>Download CSV</button>
+      <div class="actions" id="export-group" hidden>
+        <button class="btn small" type="button" id="xlsx-btn">Download Excel</button>
+        <button class="btn small" type="button" id="zip-btn">Download photos (.zip)</button>
+      </div>
     </div>
     <div class="card filters">
       <div class="field"><label class="label" for="t-period">Period</label><select id="t-period"></select></div>
@@ -262,6 +265,7 @@ button:disabled { opacity: .55; cursor: not-allowed; }
         <label><input type="checkbox" id="t-unchecked"> Not yet checked by office</label>
       </div>
     </div>
+    <span class="status-msg" id="export-msg" role="status" hidden></span>
     <div class="stats" id="team-stats"></div>
     <div id="team-list" style="display:grid;gap:18px"></div>
   </section>
@@ -721,7 +725,7 @@ button:disabled { opacity: .55; cursor: not-allowed; }
     groupedList(list, $("team-list"), { showWho: true, mine: false },
       h("div", { class: "card empty" }, h("h3", {}, uids.length ? "No jobs match these filters" : "No jobs logged yet"),
         h("p", {}, uids.length ? "Try a wider period or clear the tick boxes." : "When your team logs work from their phones, every entry appears here with who did it, when, and whether it was remedial.")));
-    $("export-btn").hidden = !S.downloads;
+    $("export-group").hidden = !S.downloads;
   }
 
   function render() {
@@ -731,19 +735,202 @@ button:disabled { opacity: .55; cursor: not-allowed; }
   ["t-period", "t-person", "t-rem", "t-open", "t-unchecked", "mine-period"].forEach(id => $(id).addEventListener("change", render));
   $("t-search").addEventListener("input", render);
 
-  // ---------- CSV ----------
-  $("export-btn").addEventListener("click", async () => {
-    const rows = teamFiltered().sort((a, b) => (a.date || "").localeCompare(b.date || "") || (a.start || "").localeCompare(b.start || ""));
-    const cols = [["Date", e => e.date], ["Employee", e => personName(e.uid)], ["Start", e => e.start], ["Finish", e => e.finish],
-      ["Hours", e => hoursOf(e).toFixed(2)], ["Job ref", e => e.jobRef], ["Customer", e => e.customer], ["Site", e => e.site],
-      ["Type", e => e.workType], ["Work completed", e => e.description], ["Status", e => STATUS_TEXT[e.status] || ""],
-      ["Remedial", e => e.remedial ? "Yes" : "No"], ["Remedial cause", e => e.remCause], ["Original job", e => e.remOriginal],
-      ["Chargeable", e => e.remedial ? e.remChargeable : ""], ["What was wrong", e => e.remIssue], ["Notes", e => e.notes],
-      ["Photos", e => (Array.isArray(e.photos) ? e.photos.length : 0)], ["Checked", e => e.checked ? "Yes" : "No"], ["Logged at", e => e.createdAt]];
-    const esc = v => { const s = v == null ? "" : String(v); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
-    const csv = [cols.map(c => c[0]).join(","), ...rows.map(e => cols.map(c => esc(c[1](e))).join(","))].join("\r\n");
+  // ---------- exports ----------
+  const LIBS = {
+    ExcelJS: "https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js",
+    JSZip: "https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js",
+  };
+  function loadLib(name) {
+    if (window[name]) return Promise.resolve(window[name]);
+    return new Promise((res, rej) => {
+      const el = document.createElement("script"); el.src = LIBS[name];
+      el.onload = () => window[name] ? res(window[name]) : rej(new Error("load"));
+      el.onerror = () => rej(new Error("load"));
+      document.head.append(el);
+    });
+  }
+  function exportMsg(text, kind = "") { const m = $("export-msg"); m.hidden = !text; m.textContent = text; m.className = "status-msg " + kind; }
+  const slug = v => String(v || "").replace(/[^A-Za-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40);
+  const folderFor = e => [e.date || "no-date", slug(e.customer) || "job", slug(e.jobRef), e.id.slice(-4)].filter(Boolean).join("_");
+  const sortAsc = list => list.sort((a, b) => (a.date || "").localeCompare(b.date || "") || (a.start || "").localeCompare(b.start || ""));
+  function exportName(ext) {
     const r = periodRange($("t-period").value);
-    try { await S.downloads.save({ filename: `hannah-job-log-${r.v === "all" ? "all" : r.from}.csv`, data: "﻿" + csv }); } catch {}
+    return `Hannah-Job-Log_${r.v === "all" ? "all-time" : r.from + "_to_" + r.to}.${ext}`;
+  }
+  function filterSummary() {
+    const r = periodRange($("t-period").value), bits = [r.t];
+    if ($("t-person").value) bits.push(personName($("t-person").value));
+    if ($("t-rem").checked) bits.push("remedial only");
+    if ($("t-open").checked) bits.push("return visit needed");
+    if ($("t-unchecked").checked) bits.push("not yet checked");
+    if ($("t-search").value.trim()) bits.push(`search "${$("t-search").value.trim()}"`);
+    return bits.join(" · ");
+  }
+  async function save(filename, data, btn, label, note = "") {
+    try {
+      const r = await S.downloads.save({ filename, data });
+      exportMsg(r && r.status === "saved" ? `${filename} saved to your downloads.${note}` : note, note ? "err" : "ok");
+    } catch (err) {
+      exportMsg(err && err.code === "cancelled" ? "" : "Couldn't save the file. Try again.", err && err.code === "cancelled" ? "" : "err");
+    } finally { btn.disabled = false; btn.textContent = label; }
+  }
+
+  $("xlsx-btn").addEventListener("click", async () => {
+    const btn = $("xlsx-btn"), label = btn.textContent;
+    const rows = sortAsc(teamFiltered());
+    if (!rows.length) { exportMsg("No jobs match these filters, so there's nothing to export.", "err"); return; }
+    btn.disabled = true; btn.textContent = "Building…"; exportMsg("");
+    let ExcelJS;
+    try { ExcelJS = await loadLib("ExcelJS"); }
+    catch { btn.disabled = false; btn.textContent = label; exportMsg("Couldn't load the Excel builder. Check your connection and try again.", "err"); return; }
+
+    const NAVY = "FF040D82", BLUE = "FF1484CE", REM = "FFC26A00", REMBG = "FFFFF2DF", GREY = "FFF2F2F2";
+    const font = (o = {}) => ({ name: "Arial", size: 10, ...o });
+    const wb = new ExcelJS.Workbook(); wb.creator = "Hannah Job Log"; wb.created = new Date();
+    const logoSrc = document.querySelector(".logo img").src;
+    const logoId = wb.addImage({ base64: logoSrc, extension: "png" });
+
+    // ----- Job log sheet
+    const ws = wb.addWorksheet("Job log", {
+      views: [{ state: "frozen", ySplit: 5, showGridLines: false }],
+      pageSetup: { orientation: "landscape", paperSize: 9, fitToPage: true, fitToWidth: 1, fitToHeight: 0, printTitlesRow: "5:5" },
+    });
+    const cols = [
+      ["Date", 12, e => e.date ? (([y, m, d]) => new Date(Date.UTC(y, m - 1, d)))(e.date.split("-").map(Number)) : null, "dd/mm/yyyy"],
+      ["Employee", 18, e => personName(e.uid)], ["Start", 8, e => e.start], ["Finish", 8, e => e.finish],
+      ["Hours", 8, e => Math.round(hoursOf(e) * 100) / 100, "0.00"], ["Job ref", 12, e => e.jobRef],
+      ["Customer", 22, e => e.customer], ["Site address", 28, e => e.site], ["Type of work", 16, e => e.workType],
+      ["Work completed", 50, e => e.description], ["Status", 18, e => STATUS_TEXT[e.status] || ""],
+      ["Remedial", 10, e => e.remedial ? "Yes" : "No"], ["Remedial cause", 22, e => e.remedial ? e.remCause : ""],
+      ["Original job", 14, e => e.remedial ? e.remOriginal : ""], ["Chargeable", 20, e => e.remedial ? e.remChargeable : ""],
+      ["What was wrong", 36, e => e.remedial ? e.remIssue : ""], ["Notes", 30, e => e.notes],
+      ["Photos", 8, e => Array.isArray(e.photos) ? e.photos.length : 0], ["Photo folder (in zip)", 34, e => (Array.isArray(e.photos) && e.photos.length) ? folderFor(e) : ""],
+      ["Checked by office", 10, e => e.checked ? "Yes" : "No"],
+      ["Logged at", 17, e => e.createdAt ? new Date(e.createdAt) : null, "dd/mm/yyyy hh:mm"],
+    ];
+    ws.columns = cols.map(([, w]) => ({ width: w }));
+    ws.getRow(1).height = 64;
+    ws.addImage(logoId, { tl: { col: 0, row: 0.1 }, ext: { width: 170, height: 76 } });
+    ws.getCell("D1").value = "JOB LOG"; ws.getCell("D1").font = font({ size: 18, bold: true, color: { argb: NAVY } });
+    ws.getCell("D1").alignment = { vertical: "middle" };
+    ws.getCell("A2").value = filterSummary(); ws.getCell("A2").font = font({ bold: true });
+    ws.getCell("A3").value = `Exported ${new Date().toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short" })}. Orange rows are remedial work. Hours are finish minus start.`;
+    ws.getCell("A3").font = font({ italic: true, color: { argb: "FF595959" } });
+    const hdr = ws.getRow(5);
+    cols.forEach(([t], i) => {
+      const c = hdr.getCell(i + 1); c.value = t;
+      c.font = font({ bold: true, color: { argb: "FFFFFFFF" } });
+      c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: NAVY } };
+      c.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
+    });
+    hdr.height = 30;
+    const thin = { style: "thin", color: { argb: "FFC9CED8" } };
+    rows.forEach((e, i) => {
+      const row = ws.getRow(6 + i);
+      cols.forEach(([, , get, fmt], j) => {
+        const c = row.getCell(j + 1); const v = get(e);
+        c.value = v === "" || v == null ? null : v;
+        c.font = font(); c.border = { top: thin, bottom: thin, left: thin, right: thin };
+        c.alignment = { vertical: "top", wrapText: true };
+        if (fmt) c.numFmt = fmt;
+        if (e.remedial) c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: REMBG } };
+      });
+      if (e.remedial) row.getCell(12).font = font({ bold: true, color: { argb: REM } });
+    });
+    const first = 6, last = 5 + rows.length, tr = last + 1;
+    const totH = rows.reduce((a, e) => a + Math.round(hoursOf(e) * 100) / 100, 0);
+    const totR = rows.filter(e => e.remedial).length;
+    const totRow = ws.getRow(tr);
+    totRow.getCell(1).value = `Total: ${rows.length} jobs`;
+    totRow.getCell(5).value = { formula: `SUM(E${first}:E${last})`, result: totH };
+    totRow.getCell(5).numFmt = "0.00";
+    totRow.getCell(11).value = "Remedial jobs";
+    totRow.getCell(12).value = { formula: `COUNTIF(L${first}:L${last},"Yes")`, result: totR };
+    for (let j = 1; j <= cols.length; j++) {
+      const c = totRow.getCell(j); c.font = font({ bold: true });
+      c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: GREY } };
+      c.border = { top: { style: "medium", color: { argb: NAVY } } };
+    }
+    ws.autoFilter = { from: { row: 5, column: 1 }, to: { row: last, column: cols.length } };
+
+    // ----- Summary sheet (formulas point at the Job log rows)
+    const sm = wb.addWorksheet("Summary", { views: [{ showGridLines: false }] });
+    sm.columns = [{ width: 24 }, { width: 10 }, { width: 10 }, { width: 14 }, { width: 13 }, { width: 18 }];
+    sm.getRow(1).height = 64;
+    sm.addImage(logoId, { tl: { col: 0, row: 0.1 }, ext: { width: 170, height: 76 } });
+    sm.getCell("C1").value = "SUMMARY BY EMPLOYEE"; sm.getCell("C1").font = font({ size: 16, bold: true, color: { argb: NAVY } });
+    sm.getCell("C1").alignment = { vertical: "middle" };
+    sm.getCell("A2").value = filterSummary(); sm.getCell("A2").font = font({ bold: true });
+    const sh = ["Employee", "Jobs", "Hours", "Remedial jobs", "Remedial %", "Return / parts open"];
+    sh.forEach((t, i) => {
+      const c = sm.getRow(4).getCell(i + 1); c.value = t;
+      c.font = font({ bold: true, color: { argb: "FFFFFFFF" } });
+      c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: NAVY } };
+      c.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
+    });
+    sm.getRow(4).height = 30;
+    const L = `'Job log'!`, rng = col => `${L}$${col}$${first}:$${col}$${last}`;
+    const names = [...new Set(rows.map(e => personName(e.uid)))].sort();
+    names.forEach((n, i) => {
+      const r = 5 + i, mine = rows.filter(e => personName(e.uid) === n);
+      const jobs = mine.length, hrs = mine.reduce((a, e) => a + Math.round(hoursOf(e) * 100) / 100, 0);
+      const rem = mine.filter(e => e.remedial).length, open = mine.filter(e => e.status && e.status !== "complete").length;
+      const row = sm.getRow(r);
+      row.getCell(1).value = n;
+      row.getCell(2).value = { formula: `COUNTIF(${rng("B")},A${r})`, result: jobs };
+      row.getCell(3).value = { formula: `SUMIF(${rng("B")},A${r},${rng("E")})`, result: hrs };
+      row.getCell(4).value = { formula: `COUNTIFS(${rng("B")},A${r},${rng("L")},"Yes")`, result: rem };
+      row.getCell(5).value = { formula: `IF(B${r}=0,0,D${r}/B${r})`, result: jobs ? rem / jobs : 0 };
+      row.getCell(6).value = { formula: `COUNTIFS(${rng("B")},A${r},${rng("K")},"<>Completed",${rng("K")},"<>")`, result: open };
+      row.getCell(3).numFmt = "0.00"; row.getCell(5).numFmt = "0%";
+      for (let j = 1; j <= 6; j++) { row.getCell(j).font = font(); row.getCell(j).border = { bottom: thin }; }
+    });
+    const st = 5 + names.length, sl = st - 1, srow = sm.getRow(st);
+    srow.getCell(1).value = "All employees";
+    srow.getCell(2).value = { formula: `SUM(B5:B${sl})`, result: rows.length };
+    srow.getCell(3).value = { formula: `SUM(C5:C${sl})`, result: totH };
+    srow.getCell(4).value = { formula: `SUM(D5:D${sl})`, result: totR };
+    srow.getCell(5).value = { formula: `IF(B${st}=0,0,D${st}/B${st})`, result: rows.length ? totR / rows.length : 0 };
+    srow.getCell(6).value = { formula: `SUM(F5:F${sl})`, result: rows.filter(e => e.status && e.status !== "complete").length };
+    srow.getCell(3).numFmt = "0.00"; srow.getCell(5).numFmt = "0%";
+    for (let j = 1; j <= 6; j++) {
+      const c = srow.getCell(j); c.font = font({ bold: true });
+      c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: GREY } };
+      c.border = { top: { style: "medium", color: { argb: NAVY } } };
+    }
+
+    const buf = await wb.xlsx.writeBuffer();
+    await save(exportName("xlsx"), new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }), btn, label);
+  });
+
+  $("zip-btn").addEventListener("click", async () => {
+    const btn = $("zip-btn"), label = btn.textContent;
+    const rows = sortAsc(teamFiltered()).filter(e => Array.isArray(e.photos) && e.photos.length);
+    const total = rows.reduce((a, e) => a + e.photos.length, 0);
+    if (!total) { exportMsg("None of the jobs in these filters have photos.", "err"); return; }
+    btn.disabled = true; btn.textContent = "Preparing…"; exportMsg("");
+    let JSZip;
+    try { JSZip = await loadLib("JSZip"); }
+    catch { btn.disabled = false; btn.textContent = label; exportMsg("Couldn't load the zip builder. Check your connection and try again.", "err"); return; }
+    const zip = new JSZip(), top = exportName("zip").replace(/\.zip$/, "").replace("Job-Log", "Job-Photos");
+    const tasks = rows.flatMap(e => e.photos.map((p, i) => ({ e, p, i })));
+    let done = 0, missing = 0;
+    const work = async ({ e, p, i }) => {
+      let data = "";
+      try { data = await getPhoto(e.uid, p.id); } catch {}
+      if (data && data.includes(",")) {
+        zip.file(`${top}/${folderFor(e)}/${String(i + 1).padStart(2, "0")}-${slug(p.label) || "Photo"}.jpg`, data.split(",")[1], { base64: true });
+      } else missing++;
+      done++; btn.textContent = `Fetching ${done}/${total}…`;
+    };
+    const queue = tasks.slice();
+    await Promise.all(Array.from({ length: 4 }, async () => { while (queue.length) await work(queue.shift()); }));
+    // a small index so the folders make sense without the spreadsheet
+    zip.file(`${top}/index.txt`, rows.map(e => `${folderFor(e)}\t${e.date} ${e.start}-${e.finish}\t${personName(e.uid)}\t${e.customer || ""}\t${e.site || ""}${e.remedial ? "\tREMEDIAL" : ""}`).join("\r\n"));
+    btn.textContent = "Zipping…";
+    const blob = await zip.generateAsync({ type: "blob", compression: "STORE" });
+    const note = missing ? ` ${missing} photo${missing > 1 ? "s" : ""} couldn't be fetched and ${missing > 1 ? "were" : "was"} left out.` : "";
+    await save(exportName("zip").replace("Job-Log", "Job-Photos"), blob, btn, label, note);
   });
 
   // ---------- data ----------
@@ -777,7 +964,7 @@ button:disabled { opacity: .55; cursor: not-allowed; }
       return;
     }
     $("who").textContent = S.isAdmin ? "Office view: you can edit and check anyone's entries" : "";
-    $("export-btn").hidden = !downloads;
+    $("export-group").hidden = !downloads;
 
     db.collection("log").onSnapshot(snap => {
       S.people = Object.fromEntries(snap.docs.map(d => [d.id, d.data()]));
