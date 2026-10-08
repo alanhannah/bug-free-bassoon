@@ -122,6 +122,20 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 .entry-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
 .empty { text-align: center; padding: 28px 16px; color: var(--muted); }
 .empty h3 { color: var(--fg); margin-bottom: 6px; }
+.photo-grid { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); }
+.thumb { position: relative; display: grid; gap: 4px; min-width: 0; }
+.thumb img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 8px; border: 1px solid var(--line); display: block; background: var(--sunk); cursor: zoom-in; }
+.thumb select { padding: 5px 6px; font-size: .85rem; }
+.thumb .x { position: absolute; top: 4px; right: 4px; width: 30px; height: 30px; border-radius: 50%; border: 0; background: var(--fg); color: var(--surface); font-size: 1.1rem; line-height: 1; cursor: pointer; }
+.thumb .tag { position: absolute; left: 4px; top: 4px; }
+.add-photo { display: grid; place-items: center; aspect-ratio: 1; border: 2px dashed var(--line); border-radius: 8px; color: var(--muted); font-family: var(--font-display); font-weight: 600; text-transform: uppercase; letter-spacing: .05em; cursor: pointer; text-align: center; padding: 8px; }
+.add-photo:focus-within { outline: 3px solid var(--blue); outline-offset: 2px; }
+.add-photo input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.entry-photos { display: grid; gap: 8px; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); }
+.lightbox { position: fixed; inset: 0; z-index: 50; background: rgba(5, 8, 20, .92); display: grid; grid-template-rows: auto 1fr; padding: calc(env(safe-area-inset-top, 0px) + 12px) 16px calc(env(safe-area-inset-bottom, 0px) + 16px); gap: 10px; }
+.lightbox .bar { display: flex; justify-content: space-between; align-items: center; gap: 10px; color: #fff; font-family: var(--font-display); font-size: 1.1rem; }
+.lightbox .bar button { background: #fff; color: #0f1630; border: 0; }
+.lightbox img { max-width: 100%; max-height: 100%; margin: auto; object-fit: contain; min-height: 0; }
 @media (prefers-reduced-motion: no-preference) { .entry { transition: border-color .2s; } }
 </style>
 
@@ -204,6 +218,14 @@ button:disabled { opacity: .55; cursor: not-allowed; }
       <div class="field">
         <label class="label" for="f-notes">Notes for the office</label>
         <textarea id="f-notes" style="min-height:64px" placeholder="Materials used, parts to order, follow-up needed, customer comments…"></textarea>
+      </div>
+
+      <div class="field">
+        <span class="label">Photos</span>
+        <div class="photo-grid" id="photo-grid">
+          <label class="add-photo" id="add-photo">+ Add photos<input type="file" id="f-photos" accept="image/*" multiple></label>
+        </div>
+        <span class="hint" id="photo-hint">Before and after shots, the fault, or the finished job. Up to 8 per entry. Photos are shrunk to save data, and upload when you press Save.</span>
       </div>
 
       <div class="actions">
@@ -313,7 +335,12 @@ button:disabled { opacity: .55; cursor: not-allowed; }
     subs: {},            // uid -> unsubscribe
     editing: null,       // { uid, id } when editing
     downloads: null,
+    photos: [],          // in the form: { key, id?, data, label, isNew }
+    removedPhotos: [],   // existing photo ids removed while editing
+    photoCache: {},      // "uid/photoId" -> data URL
   };
+  const MAX_PHOTOS = 8;
+  const PHOTO_LABELS = ["Before", "After", "Fault", "Other"];
 
   // ---------- form ----------
   function buildSeg(container, name, items) {
@@ -392,6 +419,7 @@ button:disabled { opacity: .55; cursor: not-allowed; }
     $("form-title").textContent = "Log completed work";
     $("save-btn").textContent = "Save entry";
     $("cancel-edit").hidden = true;
+    S.photos = []; S.removedPhotos = []; renderPhotoGrid();
   }
   $("cancel-edit").addEventListener("click", () => { resetForm(); msg(""); });
 
@@ -414,11 +442,16 @@ button:disabled { opacity: .55; cursor: not-allowed; }
       if (S.editing) {
         const { uid, id } = S.editing;
         const old = S.entries[uid] && S.entries[uid].get(id) || {};
-        await S.db.doc(`log/${uid}/entries/${id}`).set({ ...stripMeta(old), ...e, updatedAt: now });
+        msg(S.photos.some(p => p.isNew) ? "Uploading photos…" : "Saving…");
+        const photos = await savePhotos(uid, id);
+        await S.db.doc(`log/${uid}/entries/${id}`).set({ ...stripMeta(old), ...e, photos, updatedAt: now });
         msg("Changes saved.", "ok");
         resetForm();
       } else {
-        await S.db.collection(`log/${S.uid}/entries`).add({ ...e, createdAt: now, updatedAt: now, checked: false });
+        const ref = S.db.collection(`log/${S.uid}/entries`).doc();
+        if (S.photos.length) msg(`Uploading ${S.photos.length} photo${S.photos.length > 1 ? "s" : ""}…`);
+        const photos = await savePhotos(S.uid, ref.id);
+        await ref.set({ ...e, photos, createdAt: now, updatedAt: now, checked: false });
         clearDraft();
         msg(`Saved: ${e.customer}, ${fmtH(hoursOf(e))}.`, "ok");
         resetForm();
@@ -428,11 +461,107 @@ button:disabled { opacity: .55; cursor: not-allowed; }
       msg(err && err.code === "invalid_argument"
         ? "You don't have permission to add entries. Ask Alan to give you Contributor access."
         : err && err.code === "quota_exceeded"
-        ? "The log is full. Ask the office to export and clear old entries."
-        : "Couldn't save - check your signal and try again. Your entry is kept on this device.", "err");
+        ? "The log is full. Ask the office to export and clear old entries or photos."
+        : "Couldn't save - check your signal and try again. Your typed details are kept on this device; re-add any photos.", "err");
     } finally { btn.disabled = false; }
   });
   const stripMeta = o => { const { id, uid, ...rest } = o; return rest; };
+
+  // ---------- photos ----------
+  function loadImage(file) {
+    return new Promise((res, rej) => {
+      const url = URL.createObjectURL(file); const img = new Image();
+      img.onload = () => { URL.revokeObjectURL(url); res(img); };
+      img.onerror = () => { URL.revokeObjectURL(url); rej(new Error("unreadable")); };
+      img.src = url;
+    });
+  }
+  // shrink to a JPEG small enough to live in one database document (< ~180 KB as text)
+  async function compress(file) {
+    const img = await loadImage(file);
+    let side = 1600, q = 0.72, out = "";
+    for (let i = 0; i < 8; i++) {
+      const k = Math.min(1, side / Math.max(img.naturalWidth, img.naturalHeight));
+      const c = document.createElement("canvas");
+      c.width = Math.round(img.naturalWidth * k); c.height = Math.round(img.naturalHeight * k);
+      const g = c.getContext("2d"); g.fillStyle = "#fff"; g.fillRect(0, 0, c.width, c.height);
+      g.drawImage(img, 0, 0, c.width, c.height);
+      out = c.toDataURL("image/jpeg", q);
+      if (out.length < 180000) return out;
+      if (q > 0.5) q -= 0.1; else side = Math.round(side * 0.8);
+    }
+    if (out.length < 240000) return out;
+    throw new Error("too big");
+  }
+  $("f-photos").addEventListener("change", async ev => {
+    const files = [...ev.target.files]; ev.target.value = "";
+    const room = MAX_PHOTOS - S.photos.length;
+    if (room <= 0) { msg(`That's the limit of ${MAX_PHOTOS} photos for one entry.`, "err"); return; }
+    if (files.length > room) msg(`Only the first ${room} photo${room > 1 ? "s were" : " was"} added (limit ${MAX_PHOTOS}).`, "err");
+    $("add-photo").firstChild.textContent = "Adding…";
+    for (const f of files.slice(0, room)) {
+      try {
+        const data = await compress(f);
+        S.photos.push({ key: Math.random().toString(36).slice(2), data, label: S.photos.length ? "After" : "Before", isNew: true });
+      } catch { msg(`Couldn't read ${f.name || "a photo"}. Try taking it again or choose a JPEG.`, "err"); }
+      renderPhotoGrid();
+    }
+    $("add-photo").firstChild.textContent = "+ Add photos";
+  });
+  function renderPhotoGrid() {
+    const grid = $("photo-grid"), add = $("add-photo");
+    grid.replaceChildren(...S.photos.map((p, i) => {
+      const sel = h("select", { "aria-label": `Photo ${i + 1} label`, id: `ph-label-${p.key}` }, ...PHOTO_LABELS.map(l => h("option", { value: l }, l)));
+      sel.value = p.label; sel.addEventListener("change", () => { p.label = sel.value; p.changed = true; });
+      const img = h("img", { src: p.data, alt: `${p.label} photo ${i + 1}` });
+      img.addEventListener("click", () => openLightbox(S.photos.map(x => ({ data: x.data, label: x.label })), i));
+      const x = h("button", { class: "x", type: "button", "aria-label": `Remove photo ${i + 1}` }, "×");
+      x.addEventListener("click", () => { if (p.id) S.removedPhotos.push(p.id); S.photos.splice(i, 1); renderPhotoGrid(); });
+      return h("div", { class: "thumb" }, img, x, sel);
+    }), add);
+    add.hidden = S.photos.length >= MAX_PHOTOS;
+  }
+  async function getPhoto(uid, pid) {
+    const k = uid + "/" + pid;
+    if (!S.photoCache[k]) {
+      const snap = await S.db.doc(`log/${uid}/photos/${pid}`).get();
+      S.photoCache[k] = snap.exists ? snap.data().data : "";
+    }
+    return S.photoCache[k];
+  }
+  async function savePhotos(uid, entryId) {
+    const kept = [];
+    for (const p of S.photos) {
+      if (p.isNew) {
+        const ref = S.db.collection(`log/${uid}/photos`).doc();
+        await ref.set({ entryId, data: p.data, label: p.label, createdAt: new Date().toISOString() });
+        S.photoCache[uid + "/" + ref.id] = p.data;
+        kept.push({ id: ref.id, label: p.label });
+      } else {
+        if (p.changed) await S.db.doc(`log/${uid}/photos/${p.id}`).update({ label: p.label });
+        kept.push({ id: p.id, label: p.label });
+      }
+    }
+    for (const id of S.removedPhotos) { try { await S.db.doc(`log/${uid}/photos/${id}`).delete(); } catch {} }
+    return kept;
+  }
+  function openLightbox(list, start) {
+    let i = start;
+    const img = h("img", { alt: "" }), cap = h("span", {});
+    const prev = h("button", { class: "btn small", type: "button" }, "‹ Prev"), next = h("button", { class: "btn small", type: "button" }, "Next ›");
+    const close = h("button", { class: "btn small", type: "button" }, "Close");
+    const box = h("div", { class: "lightbox", role: "dialog", "aria-modal": "true", "aria-label": "Photo viewer" },
+      h("div", { class: "bar" }, cap, h("div", { style: "display:flex;gap:8px" }, list.length > 1 && prev, list.length > 1 && next, close)), img);
+    const draw = () => { img.src = list[i].data; img.alt = list[i].label + " photo"; cap.textContent = `${list[i].label} · ${i + 1} of ${list.length}`; };
+    const done = () => { box.remove(); document.removeEventListener("keydown", key); };
+    const key = e => { if (e.key === "Escape") done(); if (e.key === "ArrowRight") { i = (i + 1) % list.length; draw(); } if (e.key === "ArrowLeft") { i = (i - 1 + list.length) % list.length; draw(); } };
+    prev.addEventListener("click", () => { i = (i - 1 + list.length) % list.length; draw(); });
+    next.addEventListener("click", () => { i = (i + 1) % list.length; draw(); });
+    close.addEventListener("click", done);
+    box.addEventListener("click", e => { if (e.target === box) done(); });
+    document.addEventListener("keydown", key);
+    document.body.append(box); draw(); close.focus();
+  }
 
   // ---------- tabs ----------
   function show(view) {
@@ -479,6 +608,7 @@ button:disabled { opacity: .55; cursor: not-allowed; }
         e.remChargeable ? ` · ${e.remChargeable}` : "",
         e.remIssue ? h("div", {}, e.remIssue) : null),
       e.notes && h("div", { class: "entry-meta" }, h("span", {}, "Notes: " + e.notes)),
+      photoStrip(e),
       h("div", { class: "entry-meta" },
         showWho && h("span", {}, h("strong", {}, personName(e.uid))),
         h("span", {}, e.workType || ""),
@@ -492,7 +622,10 @@ button:disabled { opacity: .55; cursor: not-allowed; }
       del.addEventListener("click", async () => {
         if (del.dataset.armed !== "1") { del.dataset.armed = "1"; del.textContent = "Tap again to delete"; setTimeout(() => { del.dataset.armed = ""; del.textContent = "Delete"; }, 4000); return; }
         del.disabled = true;
-        try { await S.db.doc(`log/${e.uid}/entries/${e.id}`).delete(); } catch { del.disabled = false; del.textContent = "Couldn't delete"; }
+        try {
+          for (const p of (Array.isArray(e.photos) ? e.photos : [])) { try { await S.db.doc(`log/${e.uid}/photos/${p.id}`).delete(); } catch {} }
+          await S.db.doc(`log/${e.uid}/entries/${e.id}`).delete();
+        } catch { del.disabled = false; del.textContent = "Couldn't delete"; }
       });
       acts.append(del);
     }
@@ -509,7 +642,27 @@ button:disabled { opacity: .55; cursor: not-allowed; }
     return card;
   }
 
-  function startEdit(e) {
+  function photoStrip(e) {
+    const list = Array.isArray(e.photos) ? e.photos : [];
+    if (!list.length) return null;
+    const wrap = h("div", { class: "entry-photos" });
+    const btn = h("button", { class: "btn small", type: "button" }, `Show ${list.length} photo${list.length > 1 ? "s" : ""}`);
+    btn.addEventListener("click", async () => {
+      btn.disabled = true; btn.textContent = "Loading…";
+      const datas = await Promise.all(list.map(p => getPhoto(e.uid, p.id).catch(() => "")));
+      const items = list.map((p, i) => ({ data: datas[i], label: p.label || "Photo" })).filter(x => x.data);
+      if (!items.length) { btn.textContent = "Photos unavailable"; return; }
+      wrap.replaceChildren(...items.map((it, i) => {
+        const img = h("img", { src: it.data, alt: it.label + " photo" });
+        img.addEventListener("click", () => openLightbox(items, i));
+        return h("div", { class: "thumb" }, img, h("span", { class: "pill tag" }, it.label));
+      }));
+    });
+    wrap.append(btn);
+    return wrap;
+  }
+
+  async function startEdit(e) {
     S.editing = { uid: e.uid, id: e.id };
     writeForm(e);
     $("form-title").textContent = e.uid === S.uid ? "Edit entry" : `Edit ${personName(e.uid)}'s entry`;
@@ -518,6 +671,12 @@ button:disabled { opacity: .55; cursor: not-allowed; }
     msg("");
     show("log");
     window.scrollTo({ top: 0, behavior: "smooth" });
+    S.photos = []; S.removedPhotos = []; renderPhotoGrid();
+    const list = Array.isArray(e.photos) ? e.photos : [];
+    for (const p of list) {
+      try { const data = await getPhoto(e.uid, p.id); if (data) S.photos.push({ key: p.id, id: p.id, data, label: p.label || "Other", isNew: false }); } catch {}
+    }
+    renderPhotoGrid();
   }
 
   function groupedList(list, el, opts, emptyEl) {
@@ -580,7 +739,7 @@ button:disabled { opacity: .55; cursor: not-allowed; }
       ["Type", e => e.workType], ["Work completed", e => e.description], ["Status", e => STATUS_TEXT[e.status] || ""],
       ["Remedial", e => e.remedial ? "Yes" : "No"], ["Remedial cause", e => e.remCause], ["Original job", e => e.remOriginal],
       ["Chargeable", e => e.remedial ? e.remChargeable : ""], ["What was wrong", e => e.remIssue], ["Notes", e => e.notes],
-      ["Checked", e => e.checked ? "Yes" : "No"], ["Logged at", e => e.createdAt]];
+      ["Photos", e => (Array.isArray(e.photos) ? e.photos.length : 0)], ["Checked", e => e.checked ? "Yes" : "No"], ["Logged at", e => e.createdAt]];
     const esc = v => { const s = v == null ? "" : String(v); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
     const csv = [cols.map(c => c[0]).join(","), ...rows.map(e => cols.map(c => esc(c[1](e))).join(","))].join("\r\n");
     const r = periodRange($("t-period").value);
