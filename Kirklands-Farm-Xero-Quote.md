@@ -1,68 +1,86 @@
-# Xero Quote – Kirklands Farm, Denny (copy into Xero)
+# Xero Quote – Kirklands Farm, Denny
+Laid out the same as QU-0252 (19 Ledcameroch Road). Copy each box into Xero.
 
-**Contact:** BCT Installations Limited (confirm – or Rebecca Robinson direct)
+**Contact:** BCT Installations Limited (or Rebecca Robinson if going direct)
 **Date:** 25 Oct 2026   **Expiry:** 24 Nov 2026
 **Reference:** Kirklands Farm
-**Tax:** Domestic Reverse Charge @ 20% if billed to BCT (as QU-0151). If new-build zero-rated, use Zero Rated instead – check with accountant.
+**VAT:** New-build dwelling – Zero Rated (if billed to BCT, check whether you use Domestic Reverse Charge as on QU-0151). Confirm with accountant.
 
 ---
 
-## Line 1 – Qty 1 – Unit price £13,450.00
+## Line 1 – Qty 1.00 – Unit price £5,850.00
 
-Rebecca Robinson
+```
 Kirklands Farm
 Denovan Road
-Denny FK6 6BL
+Denny
+FK6 6BL
+Air Source Heat Pump & Radiators
+LABOUR
+Heat Pump
+-Install Vaillant aroTHERM plus 7kW ASHP on anti-vibration feet.
+-Install flexible hoses & glycol protection with glycol collector.
+-Install 45L buffer tank & 300L unvented cylinder.
+-Install G3 kit, tundish & discharge pipework to outside.
+-Install magnetic filter, fill & flush valve & auto by-pass.
+-Install heating expansion vessel & Robokit.
+-Install Wilo pump, 3 port valve & zone valves (UFH & radiator circuits).
+-Install Stag rotary isolator, relay, base & containment.
+-Install Vaillant SensoComfort RF controls & outdoor sensor.
+-Flow & return connection to UFH manifold.
+-Insulate all exposed pipework to BS 5422.
+Fill, flush & commission.
+Warranty registered.
+```
 
-Air Source Heat Pump Install
-Supply & Install
-Vaillant Arotherm+ 7kw ASHP.
+## Line 2 – Qty 1.00 – Unit price £7,600.00
+
+```
+MATERIAL
+Vaillant aroTHERM plus 7kW ASHP.
 Vaillant 45L buffer tank.
 Vaillant 300L unvented cylinder.
-Vaillant flexible hoses.
-Anti vibration feet.
-Vaillant Senso Comfort rf.
-Vaillant outdoor sensor.
-Vaillant G3 kit.
-Honeywell 3 port valve.
-2 x zone valves (UFH & radiator circuits).
+Vaillant flexible hoses & anti-vibration feet.
+Vaillant SensoComfort RF & outdoor sensor.
+Vaillant G3 kit & tundish.
+Honeywell 3 port valve & 2 x zone valves.
 Intaklean magnetic filter.
-Fill & flush valve.
-Auto by-pass.
-Stag rotary isolator.
-Relay, base & containment.
-Heating expansion vessel.
-Robokit.
+Fill & flush valve & auto by-pass.
+Heating expansion vessel & Robokit.
 Wilo pump & valves.
-20L Glycol.
-Vaillant glycol collector.
-Flow & return connection to UFH manifold.
-All associated pipework.
-Pipework insulated where necessary.
-System filled, flushed & commissioned.
-Warranty registered.
-UFH manifold, pipework & UFH controls by others.
+20L glycol & Vaillant glycol collector.
+Stag rotary isolator, relay, base & containment.
+Pipe, fittings & insulation.
+```
 
-## Line 2 – Qty 1 – Unit price £1,750.00
+## Line 3 – Qty 4.00 – Unit price £437.50  (= £1,750.00)
 
-Radiators – First Floor
-Supply & Install
-2 x 600 x 1000 K2 radiators (Bedroom 2 & Bedroom 3).
-1 x 600 x 600 K2 radiator (Landing).
-1 x 1200 x 600 heated towel rail (Shower room).
-Danfoss TRVs & lockshields.
-Flow & return pipework from plant.
-System balanced.
+```
+Radiators
+Supply & install first floor radiators including valves.
+-2 x 600 x 1000 K2 radiators (Bedroom 2 & Bedroom 3).
+-1 x 600 x 600 K2 radiator (Landing).
+-1 x 1200 x 600 heated towel rail (Shower room).
+-Danfoss TRVs & lockshields.
+-Flow & return pipework from plant.
+-System balanced.
+```
 
-## Line 3 (optional) – Qty 2 – Unit price £325.00
-
-Optional – Heated towel rails to ground floor bathroom & en-suite.
+**Subtotal: £15,200.00**
 
 ---
 
-**Subtotal:** £15,200.00 (excl. optional) / £15,850.00 (incl. optional)
+## Terms (paste into the Terms box)
 
-**Terms / notes:**
-Radiator sizes subject to final heat loss calculation.
-Electrical supply to heat pump isolator by others.
-Builder's work (cores, plinth/base for heat pump) by others.
+```
+Provisional items (not included in quote total):
+- Heated towel rails to ground floor bathroom & en-suite: £325.00 each
+- Radiator sizes subject to final heat loss calculation.
+Exclusions:
+- Underfloor heating, manifold & UFH controls (by others).
+- Electrical supply to heat pump isolator & controls (electrician).
+- Heat pump base/plinth, wall cores & making good (by main contractor).
+- Lifting/refitting floorboards, chasing & boxing in (by main contractor).
+Quote based on Vaillant aroTHERM plus 7kW as specified in SAP assessment
+E8130 (45°C flow temperature). Any changes to specification will be priced separately.
+```
